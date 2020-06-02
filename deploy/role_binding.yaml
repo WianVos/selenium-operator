@@ -1,0 +1,11 @@
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: selenium-operator
+subjects:
+- kind: ServiceAccount
+  name: selenium-operator
+roleRef:
+  kind: Role
+  name: selenium-operator
+  apiGroup: rbac.authorization.k8s.io

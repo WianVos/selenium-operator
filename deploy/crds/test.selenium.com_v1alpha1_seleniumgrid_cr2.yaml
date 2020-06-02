@@ -1,0 +1,7 @@
+apiVersion: test.selenium.com/v1alpha1
+kind: SeleniumGrid
+metadata:
+  name: example-seleniumgrid
+spec:
+  # Add fields here
+  chromeNodes: 2
