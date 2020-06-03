@@ -6,11 +6,14 @@ import (
 
 	testv1alpha1 "github.com/WianVos/selenium-operator/pkg/apis/test/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -128,9 +131,29 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 		return reconcile.Result{}, err
 	}
 
-	// chech if the requested number of worker pods are actually running
+	// check if the requested number of worker pods are actually running
 
 	// Next lest handle the workers ..
+	// we can only start the workers once the grid hub is available so that we can register the workers with the hub
+	// if the hub is not available we are going to return and requeue this request
+	//reqLogger.Info("STATUS", found.Status.PodConditions[2])
+	// if found.Status.Conditions.Type["PodReady"].Status != "Ready" {
+	// 	reqLogger.Info("THE GRID HUB IS NOT READY FOR BUSINESS")
+	// 	return reconcile.Result{Requeue: true}, nil
+	// }
+
+	// for x, y := range found.Status.Conditions {
+	// 	reqLogger.Info("OUTPUT", x, "OUTPUT2", y)
+	// }
+	for _, c := range found.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			if c.Status == corev1.ConditionTrue {
+				reqLogger.Info("Grid Pod ready for business", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
+			} else {
+				return reconcile.Result{Requeue: true}, nil
+			}
+		}
+	}
 
 	// Lets get all worker pods
 	workerList := &corev1.PodList{}
@@ -209,9 +232,16 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 }
 
 func newPodForGrid(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
+
+	n := cr.Name
+	v := cr.Spec.HubVersion
+	p := int32(4444)
+	cImage := "selenium/hub:" + v
+
 	labels := map[string]string{
-		"app":         cr.Name,
+		"app":         n,
 		"clusterRole": "grid",
+		"version":     v,
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -222,9 +252,33 @@ func newPodForGrid(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
+					Name:  "selenium-hub",
+					Image: cImage,
+					Ports: []corev1.ContainerPort{{
+						ContainerPort: p,
+						Name:          "selenium",
+					}},
+					Resources: getResourceRequirements(getResourceList(cr.Spec.HubCPU, cr.Spec.HubMemory), getResourceList("", "")),
+					LivenessProbe: &corev1.Probe{
+						Handler: corev1.Handler{
+							HTTPGet: &corev1.HTTPGetAction{
+								Path: "/wd/hub/status",
+								Port: intstr.FromInt(int(p)),
+							},
+						},
+						InitialDelaySeconds: 30,
+						TimeoutSeconds:      5,
+					},
+					ReadinessProbe: &corev1.Probe{
+						Handler: corev1.Handler{
+							HTTPGet: &corev1.HTTPGetAction{
+								Path: "/wd/hub/status",
+								Port: intstr.FromInt(int(p)),
+							},
+						},
+						InitialDelaySeconds: 1,
+						TimeoutSeconds:      5,
+					},
 				},
 			},
 		},
@@ -253,6 +307,26 @@ func newPodForWorker(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
 			},
 		},
 	}
+}
+
+//Helper methods below
+
+func getResourceList(cpu, memory string) v1.ResourceList {
+	res := v1.ResourceList{}
+	if cpu != "" {
+		res[v1.ResourceCPU] = resource.MustParse(cpu)
+	}
+	if memory != "" {
+		res[v1.ResourceMemory] = resource.MustParse(memory)
+	}
+	return res
+}
+
+func getResourceRequirements(requests, limits v1.ResourceList) v1.ResourceRequirements {
+	res := v1.ResourceRequirements{}
+	res.Requests = requests
+	res.Limits = limits
+	return res
 }
 
 // newPodForCR returns a busybox pod with the same name/namespace as the cr

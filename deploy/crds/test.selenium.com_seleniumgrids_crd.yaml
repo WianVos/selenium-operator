@@ -38,8 +38,17 @@ spec:
                 https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html'
               format: int32
               type: integer
+            hubcpu:
+              type: string
+            hubmemory:
+              type: string
+            hubversion:
+              type: string
           required:
           - chromeNodes
+          - hubcpu
+          - hubmemory
+          - hubversion
           type: object
         status:
           description: SeleniumGridStatus defines the observed state of SeleniumGrid

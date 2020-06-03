@@ -12,7 +12,10 @@ type SeleniumGridSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-	ChromeNodes int32 `json:"chromeNodes"`
+	ChromeNodes int32  `json:"chromeNodes"`
+	HubVersion  string `json:"hubversion"`
+	HubMemory   string `json:"hubmemory"`
+	HubCPU      string `json:"hubcpu"`
 }
 
 // SeleniumGridStatus defines the observed state of SeleniumGrid

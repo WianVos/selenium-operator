@@ -5,3 +5,8 @@ metadata:
 spec:
   # Add fields here
   chromeNodes: 3
+  hubcpu: ".5"
+  hubmemory: "512m"
+  hubversion: "3.141"
+  #hubversion: "latest"
+              
