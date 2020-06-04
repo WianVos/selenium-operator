@@ -3,6 +3,7 @@ package seleniumgrid
 import (
 	"context"
 	"reflect"
+	"time"
 
 	testv1alpha1 "github.com/WianVos/selenium-operator/pkg/apis/test/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -107,19 +108,19 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 
 	// Start by handeling the grid pod first
 	// Define a new Pod object
-	pod := newPodForGrid(gridInstance)
+	gridPod := newPodForGrid(gridInstance)
 
 	// Set SeleniumGrid instance as the owner and controller
-	if err := controllerutil.SetControllerReference(gridInstance, pod, r.scheme); err != nil {
+	if err := controllerutil.SetControllerReference(gridInstance, gridPod, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 
 	// Check if this Pod already exists
 	found := &corev1.Pod{}
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: gridPod.Name, Namespace: gridPod.Namespace}, found)
 	if err != nil && errors.IsNotFound(err) {
-		reqLogger.Info("Creating a new Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
-		err = r.client.Create(context.TODO(), pod)
+		reqLogger.Info("Creating a new Pod", "Pod.Namespace", gridPod.Namespace, "Pod.Name", gridPod.Name)
+		err = r.client.Create(context.TODO(), gridPod)
 		// if we run into an error ... return the results with an error
 		if err != nil {
 			return reconcile.Result{}, err
@@ -133,26 +134,39 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 
 	// check if the requested number of worker pods are actually running
 
-	// Next lest handle the workers ..
-	// we can only start the workers once the grid hub is available so that we can register the workers with the hub
+	// Next lets handle the workers ..
+	// we can only start the workers once the grid hub is available and reachable by means of a service
+	// so that we can register the workers with the hub
 	// if the hub is not available we are going to return and requeue this request
-	//reqLogger.Info("STATUS", found.Status.PodConditions[2])
-	// if found.Status.Conditions.Type["PodReady"].Status != "Ready" {
-	// 	reqLogger.Info("THE GRID HUB IS NOT READY FOR BUSINESS")
-	// 	return reconcile.Result{Requeue: true}, nil
-	// }
 
-	// for x, y := range found.Status.Conditions {
-	// 	reqLogger.Info("OUTPUT", x, "OUTPUT2", y)
-	// }
-	for _, c := range found.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			if c.Status == corev1.ConditionTrue {
-				reqLogger.Info("Grid Pod ready for business", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
-			} else {
-				return reconcile.Result{Requeue: true}, nil
-			}
+	if waitForPodReady(found, 10, 5) == false {
+		reqLogger.Info("Requeing while waiting for Pod readiness", "Pod.Namespace", gridPod.Namespace, "Pod.Name", gridPod.Name)
+		return reconcile.Result{Requeue: true}, nil
+	}
+
+	// once the hub is ready we are going to devine a service
+	gridService := newServiceForHub(gridInstance)
+
+	// Set SeleniumGrid instance as the owner and controller
+	if err := controllerutil.SetControllerReference(gridInstance, gridService, r.scheme); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	foundService := &corev1.Service{}
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: gridService.Name, Namespace: gridService.Namespace}, foundService)
+	if err != nil && errors.IsNotFound(err) {
+		reqLogger.Info("Creating a new Serive", "Pod.Namespace", gridService.Namespace, "Pod.Name", gridService.Name)
+		err = r.client.Create(context.TODO(), gridService)
+		// if we run into an error ... return the results with an error
+		if err != nil {
+			reqLogger.Error(err, "Failed to create service", "service.name", gridService.Name)
+			return reconcile.Result{}, err
 		}
+
+		reqLogger.Info("Grid Service already exists", "Pod.Namespace", foundService.Namespace, "Pod.Name", foundService.Name)
+
+	} else if err != nil {
+		return reconcile.Result{}, err
 	}
 
 	// Lets get all worker pods
@@ -215,7 +229,7 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 	if numAvailable < gridInstance.Spec.ChromeNodes {
 		reqLogger.Info("Scaling up pods", "Currently available", numAvailable, "Required replicas", gridInstance.Spec.ChromeNodes)
 		// Define a new Pod object
-		pod := newPodForWorker(gridInstance)
+		pod := newPodForWorker(gridInstance, gridPod.Name)
 		// Set PodSet instance as the owner and controller
 		if err := controllerutil.SetControllerReference(gridInstance, pod, r.scheme); err != nil {
 			return reconcile.Result{}, err
@@ -252,7 +266,7 @@ func newPodForGrid(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:  "selenium-hub",
+					Name:  n + "-hub",
 					Image: cImage,
 					Ports: []corev1.ContainerPort{{
 						ContainerPort: p,
@@ -286,10 +300,16 @@ func newPodForGrid(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
 
 }
 
-func newPodForWorker(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
+func newPodForWorker(cr *testv1alpha1.SeleniumGrid, g string) *corev1.Pod {
+	n := cr.Name
+	v := cr.Spec.HubVersion
+	p := int32(5555)
+	cImage := "selenium/node-chrome-debug:" + v
+
 	labels := map[string]string{
 		"app":         cr.Name,
 		"clusterRole": "worker",
+		"version":     v,
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -300,14 +320,82 @@ func newPodForWorker(cr *testv1alpha1.SeleniumGrid) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
+					Name:  n + "-node-chrome",
+					Image: cImage,
+					Ports: []corev1.ContainerPort{{
+						ContainerPort: p,
+					}},
+					// VolumeMounts: []corev1.VolumeMount{{
+					// 	MountPath: "/dev/shm",
+					// 	Name:      "dshm",
+					// }},
+					Env: []corev1.EnvVar{{
+						Name:  "HUB_HOST",
+						Value: n,
+					}, {
+						Name:  "HUB_PORT",
+						Value: "4444",
+					}},
+					Resources: getResourceRequirements(getResourceList(cr.Spec.HubCPU, cr.Spec.HubMemory), getResourceList("", "")),
 				},
 			},
 		},
 	}
 }
+
+func newServiceForHub(cr *testv1alpha1.SeleniumGrid) *corev1.Service {
+	n := cr.Name
+	p := int32(4444)
+
+	labels := map[string]string{
+		"app": cr.Name,
+	}
+
+	selector := map[string]string{
+		"app":         n,
+		"clusterRole": "grid",
+	}
+
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      n,
+			Namespace: cr.Namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: selector,
+			Ports: []corev1.ServicePort{{
+				Port:       p,
+				TargetPort: intstr.FromInt(int(p)),
+			}},
+		},
+	}
+}
+
+///
+// //spec:
+//       volumes:
+//       - name: dshm
+//         emptyDir:
+//           medium: Memory
+//       containers:
+//       - name: selenium-node-chrome
+//         image: selenium/node-chrome-debug:3.141
+//         ports:
+//           - containerPort: 5555
+//         volumeMounts:
+//           - mountPath: /dev/shm
+//             name: dshm
+//         env:
+//           - name: HUB_HOST
+//             value: "selenium-hub"
+//           - name: HUB_PORT
+//             value: "4444"
+//         resources:
+//           limits:
+//             memory: "1000Mi"
+// 			cpu: ".5"
+// /
 
 //Helper methods below
 
@@ -327,6 +415,27 @@ func getResourceRequirements(requests, limits v1.ResourceList) v1.ResourceRequir
 	res.Requests = requests
 	res.Limits = limits
 	return res
+}
+
+func podReady(p *corev1.Pod) bool {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			if c.Status == corev1.ConditionTrue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func waitForPodReady(p *corev1.Pod, t, r int) bool {
+	for i := 0; r > i; i++ {
+		if podReady(p) {
+			return true
+		}
+		time.Sleep(time.Duration(t) * time.Second)
+	}
+	return false
 }
 
 // newPodForCR returns a busybox pod with the same name/namespace as the cr

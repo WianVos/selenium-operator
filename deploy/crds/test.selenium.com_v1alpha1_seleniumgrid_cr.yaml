@@ -4,9 +4,9 @@ metadata:
   name: example-seleniumgrid
 spec:
   # Add fields here
-  chromeNodes: 3
+  chromeNodes: 2
   hubcpu: ".5"
-  hubmemory: "512m"
+  hubmemory: "1000M"
   hubversion: "3.141"
   #hubversion: "latest"
               
