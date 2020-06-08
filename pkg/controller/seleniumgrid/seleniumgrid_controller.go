@@ -2,10 +2,12 @@ package seleniumgrid
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
 	testv1alpha1 "github.com/WianVos/selenium-operator/pkg/apis/test/v1alpha1"
+	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -155,7 +157,7 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 	foundService := &corev1.Service{}
 	err = r.client.Get(context.TODO(), types.NamespacedName{Name: gridService.Name, Namespace: gridService.Namespace}, foundService)
 	if err != nil && errors.IsNotFound(err) {
-		reqLogger.Info("Creating a new Serive", "Pod.Namespace", gridService.Namespace, "Pod.Name", gridService.Name)
+		reqLogger.Info("Creating a new Service", "Pod.Namespace", gridService.Namespace, "Pod.Name", gridService.Name)
 		err = r.client.Create(context.TODO(), gridService)
 		// if we run into an error ... return the results with an error
 		if err != nil {
@@ -164,6 +166,36 @@ func (r *ReconcileSeleniumGrid) Reconcile(request reconcile.Request) (reconcile.
 		}
 
 		reqLogger.Info("Grid Service already exists", "Pod.Namespace", foundService.Namespace, "Pod.Name", foundService.Name)
+
+	} else if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// lets attach a service so that users can reach the grid easily
+	reqLogger.Info("TEST")
+	routeToService := newRouteToService(gridInstance)
+
+	if err := controllerutil.SetControllerReference(gridInstance, routeToService, r.scheme); err != nil {
+		fmt.Printf("%+v\n", routeToService)
+
+		return reconcile.Result{}, corev1.ErrIntOverflowGenerated
+	}
+
+	foundRouteToService := &routev1.Route{}
+	err = r.client.Get(context.TODO(), types.NamespacedName{Name: gridService.Name, Namespace: gridService.Namespace}, foundRouteToService)
+
+	reqLogger.Info("TEST2")
+
+	if err != nil && errors.IsNotFound(err) {
+		reqLogger.Info("Creating a new route to service", gridService.Namespace, "Pod.Name", gridService.Name)
+		err = r.client.Create(context.TODO(), routeToService)
+		// if we run into an error ... return the results with an error
+		if err != nil {
+			reqLogger.Error(err, "Failed to create route to service", routeToService.Name, routeToService.Name)
+			return reconcile.Result{}, err
+		}
+
+		reqLogger.Info("Route to Service already exists", "Pod.Namespace", foundService.Namespace, "Pod.Name", foundService.Name)
 
 	} else if err != nil {
 		return reconcile.Result{}, err
@@ -344,7 +376,6 @@ func newPodForWorker(cr *testv1alpha1.SeleniumGrid, g string) *corev1.Pod {
 }
 
 func newServiceForHub(cr *testv1alpha1.SeleniumGrid) *corev1.Service {
-	n := cr.Name
 	p := int32(4444)
 
 	labels := map[string]string{
@@ -352,13 +383,13 @@ func newServiceForHub(cr *testv1alpha1.SeleniumGrid) *corev1.Service {
 	}
 
 	selector := map[string]string{
-		"app":         n,
+		"app":         cr.Name,
 		"clusterRole": "grid",
 	}
 
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      n,
+			Name:      cr.Name,
 			Namespace: cr.Namespace,
 			Labels:    labels,
 		},
@@ -372,6 +403,40 @@ func newServiceForHub(cr *testv1alpha1.SeleniumGrid) *corev1.Service {
 	}
 }
 
+func newRouteToService(cr *testv1alpha1.SeleniumGrid) *routev1.Route {
+
+	var termination routev1.TLSTerminationType
+
+	termination = routev1.TLSTerminationEdge
+
+	labels := map[string]string{
+		"app": cr.Name,
+	}
+
+	return &routev1.Route{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cr.Name,
+			Namespace: cr.Namespace,
+			Labels:    labels,
+		},
+		Spec: routev1.RouteSpec{
+			To: routev1.RouteTargetReference{
+				Kind: "Service",
+				Name: cr.Name,
+			},
+			TLS: &routev1.TLSConfig{
+				Termination: termination,
+			},
+
+			// Port: routev1.RoutePort{{
+			// 	TargetPort: intstr.FromInt(int(p)),
+			// }},
+		},
+	}
+
+}
+
+//func newRouteToService
 ///
 // //spec:
 //       volumes:

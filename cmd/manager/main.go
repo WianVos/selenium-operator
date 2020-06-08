@@ -17,6 +17,7 @@ import (
 	"github.com/WianVos/selenium-operator/pkg/controller"
 	"github.com/WianVos/selenium-operator/version"
 
+	routev1 "github.com/openshift/api/route/v1"
 	"github.com/operator-framework/operator-sdk/pkg/k8sutil"
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
 	"github.com/operator-framework/operator-sdk/pkg/leader"
@@ -25,6 +26,7 @@ import (
 	sdkVersion "github.com/operator-framework/operator-sdk/version"
 	"github.com/spf13/pflag"
 	v1 "k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -40,6 +42,8 @@ var (
 	operatorMetricsPort int32 = 8686
 )
 var log = logf.Log.WithName("cmd")
+
+// init will run before main
 
 func printVersion() {
 	log.Info(fmt.Sprintf("Operator Version: %s", version.Version))
@@ -118,6 +122,11 @@ func main() {
 
 	// Setup Scheme for all resources
 	if err := apis.AddToScheme(mgr.GetScheme()); err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
+
+	if err := routev1.AddToScheme(mgr.GetScheme()); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
